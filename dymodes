@@ -7,8 +7,7 @@ of printing out the command
 """
 
 __app__ = "dymodes"
-__version__ = "0.1c"
-__author__ = "wabwino maliwa"
+__version__ = "01-aug-2021"
 
 import glob
 import subprocess
@@ -43,7 +42,7 @@ def _set_edit_rules():
 
 
 def print_help():
-    print(__app__, "version", __version__)
+    print(__app__, "(" + __version__ + " release)")
     print(__doc__, end="")
 
 
@@ -139,12 +138,7 @@ def get_commands(device):
         if re.search(r' {k}|{k} '.format(k=re.escape(k)),device['name'],re.I):
             # print('/we know this device/:', device['name'])
             cmds = _cmds[k] + cmds
-            del _cmds[k]
             break
-
-    # - Now add the rest.
-    for j in _cmds.keys():
-        cmds += _cmds[j]
 
     return cmds
 
