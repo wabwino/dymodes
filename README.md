@@ -1,4 +1,4 @@
-# dymodes - dynamic [USB] mode switch.
+# dymodes - dynamic [usb] mode switch.
 Sometimes a USB modem isn't recognized by a Linux machine because it is in storage-mode, not modem-mode. Installing `usb_modeswitch` usually solves the problem, but sometimes, `usb_modeswitch` doesn't know the right mode-switching command for a given modem. And that's where `dymodes` comes in: it dynamically tries to find the right command.
 
 ## usage
