@@ -19,6 +19,6 @@ When `--edit-rules` is given, `dymodes` backs up the original rules file in the 
 **NOTE**: Plug in only one modem when running `dymodes`.
 
 ## requirements
- - python >= 3.4
+ - python >= 3.6
  - usb_modeswitch
  - lsusb
