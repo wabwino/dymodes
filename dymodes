@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # - dynamic [usb] mode switch
 """
-when invoked with '--edit-rules', it
-edits the mode-switch rules instead
-of printing out the command
+when ran with '--edit-rules', it edits
+usb_modeswitch udev rules so that for the
+given modem, switching must henceforth be
+automatic
 """
 
 __app__ = "dymodes"
-__version__ = "01-aug-2021"
+__version__ = "12-dec-2021"
+__author__ = "wabwino maliwa"
 
 import glob
 import subprocess
@@ -18,22 +20,31 @@ import sys
 import shutil
 
 
-RULES_FILE = "/lib/udev/rules.d/40-usb_modeswitch.rules"
-RULE       = """# Produced by dymodes ({product})
-ATTR{{idVendor}}=="{vid}", ATTR{{idProduct}}=="{pid}", \
-RUN+="{usb_modeswitch} -v 0x{vid} -p 0x{pid} {cmd}"\n"""
+UDEV_RULE_FILE = "/lib/udev/rules.d/40-usb_modeswitch.rules"
+RULE_STRUCTURE = """# {product} (produced by dymodes)
+ATTR{{idVendor}}=="{vid}", ATTR{{idProduct}}=="{pid}", RUN+="usb_modeswitch '/%k'"
+"""
+CUSTOM_CONFIG_DIR = "/etc/usb_modeswitch.d/"
 
 should_edit_rules = False
 
 
 def _error_exit(msg):
-    print(msg, file=sys.stderr)
-    exit(1)
+    exit(msg)
 
 
-def _check_tool(tool):
-    """Check if a given tool is available on the system."""
-    return bool(shutil.which(tool))
+def _process_args(args_schema, args):
+    """Do a simple argument processing."""
+    if len(args) == 0:
+        return
+    if len(args) > 1:
+        _error_exit("only one argument is expected")
+    arg = args[0]
+    if arg not in args_schema:
+        _error_exit(f"an unknown argument '{arg}'")
+    args_schema[arg]['action']()
+    if args_schema[arg]['exit']:
+        exit()
 
 
 def _set_edit_rules():
@@ -41,42 +52,42 @@ def _set_edit_rules():
     should_edit_rules = True
 
 
+def _check_tool(tool):
+    """Check if a given tool is available on the system."""
+    return bool(shutil.which(tool))
+
+
 def print_help():
-    print(__app__, "(" + __version__ + " release)")
-    print(__doc__, end="")
+    print(f"{__app__} - dynamic [usb] mode switch")
+    print(f"({__version__} release)")
+    print(__doc__.rstrip())
 
 
-def _process_args(options, args):
-    """Does a kinda tightly-coupled argument processing."""
-    if len(args) == 0:
-        return
-    if len(args) > 1:
-        _error_exit("only one argument is expected")
-    arg = args[0]
-    if arg not in options:
-        _error_exit("an unknown argument '{}'".format(arg))
-    options[arg]['action']()
-    if options[arg]['exit']:
-        exit()
+def refresh_rules():
+    """Refresh udev rules."""
+    subprocess.call(["udevadm", "control", "--reload-rules"])
 
 
 def is_detected():
-    """Check if a modem is detected.  Returns a boolean."""
-    def _check_ports(surfix):
-        return glob.glob("/dev/tty{}*".format(surfix))
+    """Check if a modem is detected.  Returns a Boolean."""
+    def _check_ports(suffix):
+        return glob.glob(f"/dev/tty{suffix}*")
     return bool(_check_ports("USB") or _check_ports("ACM"))
 
 
 def choose_device():
-    """Present a menu to user for picking a device we should work on.
+    """Present a user-menu for selecting a device to work on.
 
     Returns the chosen device.
     """
+
     def _get_input(devices):
         print("please select device")
+        print("        ---")
         for i in range(len(devices)):
-            print(" - ", i+1, ": ", devices[i]['name'].lower(), sep="")
-            
+            print(f"  - {i + 1}: {devices[i]['name'].lower()}")
+        print()
+
         while True:
             val = input(": ")
             try:
@@ -86,9 +97,9 @@ def choose_device():
             except ValueError:
                 print("(invalid input. please try again)")
             else:
-                return devices[val-1]
+                return devices[val - 1]
 
-    # - Get list of plugged-in USB devices from `lsusb`.
+    # - Get list of plugged-in USB devices using `lsusb`.
     output = subprocess.check_output('lsusb').decode('utf-8')
     regexp = r'^(?:[^\s]+\s){5}([0-9a-f]+):([0-9a-f]+)\s(.+)'
     devices = []
@@ -96,61 +107,81 @@ def choose_device():
         sre = re.match(regexp, line, re.I)
         if not sre:
             _error_exit("sorry, your system's `lsusb` is producing a strange "
-                "output")
-        if not sre.group(3).strip():  # If it has no name, skip it.
+                        "output")
+        if not sre.group(3).strip():  # If a device has no name, skip it.
             continue
         devices.append({
-                'vid': sre.group(1),
-                'pid': sre.group(2),
-                'name': sre.group(3)
-            })
+            'vid': sre.group(1),
+            'pid': sre.group(2),
+            'name': sre.group(3)
+        })
 
     return _get_input(devices)
 
 
 def get_commands(device):
-    """Return usb_modeswitch's commands.
+    """Return a list usb_modeswitch's commands that can work the given
+    device.  Each command is a dictionary of a command-line argument
+    ('cmd') and a raw configuration parameter ('param').
 
     It puts specific commands for the given device at the beginning
     (that is if we know the device).
     """
+    def _entry(param, *args):
+        return {
+            'param': param,
+            'cmd': args
+        }
+
     _cmds = {
-        'mobileaction': ['-A'],
-        'qisda':        ['-B'],
-        'quanta':       ['-E'],
-        'gct':          ['-G'],
-        'huawei':       ['-J', '-H', '-X'],
-        'cisco':        ['-L'],
-        'sequans':      ['-N'],
-        'sony':         ['-O'],
-        'sierra':       ['-S'],
-        'option':       ['-S'],
-        'kobil':        ['-T'],
-        'blackberry':   ['-Z'],
-        'd-link':       ['-u 2']
+        'mobileaction': _entry('MobileActionMode=1', '-A'),
+        'qisda':        _entry('QisdaMode=1', '-B'),
+        'quanta':       _entry('QuantaMode=1', '-E'),
+        'gct':          _entry('GCTMode=1', '-G'),
+        'huawei':       [_entry('HuaweiNewMode=1', '-J'),
+                         _entry('HuaweiAltMode=1', '-X'),
+                         _entry('HuaweiMode=1', '-H')],
+        'cisco':        _entry('CiscoMode=1', '-L'),
+        'sequans':      _entry('SequansMode=1', '-N'),
+        'sony':         _entry('SonyMode=1', '-O'),
+        'sierra':       _entry('SierraMode=1', '-S'),
+        'option':       _entry('OptionMode=1', '-U'),
+        'kobil':        _entry('KobilMode=1', '-T'),
+        'blackberry':   _entry('BlackberryMode=1', '-Z'),
+        'pantech':      [_entry('PantechMode=1', '-F', '1'),
+                         _entry('PantechMode=2', '-F', '2'),
+                         _entry('PantechMode=3', '-F', '3'),
+                         _entry('PantechMode=4', '-F', '4')],
     }
-    
-    cmds = ['-K', '-d']
-    # - Pick command for the detected modem and put it at the beginning.
-    # NOTE: We have already inserted the general commands (which are a
+
+    cmds = [
+        _entry('StandardEject=1', '-K'),
+        _entry('DetachStorageOnly=1', '-d')
+    ]
+    # - Pick command for the chosen modem.
+    # NOTE: We have already inserted general commands above (which are a
     # second preference to the vendor-specific ones).
     for k in _cmds.keys():
-        if re.search(r' {k}|{k} '.format(k=re.escape(k)),device['name'],re.I):
-            # print('/we know this device/:', device['name'])
-            cmds = _cmds[k] + cmds
+        if re.search(r' {k}|{k} '.format(k=re.escape(k)), device['name'],
+                     re.I):
+            cmds = (_cmds[k] if isinstance(_cmds[k], list) else [_cmds[k]]) + cmds
             break
 
     return cmds
 
 
 def apply_commands(cmds, vid, pid):
-    """Apply given commands, returning the first one to work."""
-    def _send_cmds(*args):
+    """Apply given commands.
+
+    It returns a list of parameters of the command that worked.
+    """
+
+    def _send_cmds(args):
         print("." * len(args))
         # Only wait if the process exit status is 0.  Any other status
         # isn't a sign of success.
         if subprocess.call(
-                ['usb_modeswitch', '-v',vid, '-p',pid] + list(args),
+                ['usb_modeswitch', '-v', vid, '-p', pid] + list(args),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
         ) == 0:
@@ -159,53 +190,69 @@ def apply_commands(cmds, vid, pid):
                 if is_detected():
                     return True
 
+    # NOTE: For each command, we try the command itself.  If that fails,
+    # we try it with ResetUSB.
     for c in cmds:
         trials = [
-            (c,),
-            (c, '-n'),
-            (c, '-R')
+            {
+                'args': c['cmd'],
+                'params': [c['param']]
+            },
+            {
+                'args': (*c['cmd'], '-R'),
+                'params': [c['param'], 'ResetUSB=1']
+            }
         ]
         for t in trials:
-            if _send_cmds(*t):
-                return " ".join(t)
+            if _send_cmds(t['args']):
+                return t['params']
 
 
-def edit_rules(new_rule):
-    """Edit mode-switch rules, adding the new one to the bottom.
+def edit_rules(device, params):
+    """Add a new rule to usb_modeswitch udev rules and create a custom
+    usb_modeswitch config file for the device.
 
-    It backs up the original file in the current directory and edits
-    the real one.
+    It backs up the original udev rule file in '~/.dymodes/' just in
+    case the editing introduces issues.
     """
-    shutil.copy2(RULES_FILE, './')
 
+    def _make_backup():
+        backup_dir = os.path.join(os.path.expanduser(f"~{os.getlogin()}"),
+                                  f".{__app__}")
+        if not os.path.exists(backup_dir):
+            os.mkdir(backup_dir)
+        shutil.copy2(UDEV_RULE_FILE, backup_dir)
+
+    # - Create custom config for the modem.
+    with open(os.path.join(CUSTOM_CONFIG_DIR,
+                           f"{device['vid']}:{device['pid']}"),
+              'w') as filo:
+        filo.write(f"# {device['name']} (produced by dymodes)")
+        filo.write("\n")
+        for p in params:
+            filo.write(p)
+            filo.write("\n")
+
+    # - Add rule to udev rules.
+    _make_backup()
+    new_rule = RULE_STRUCTURE.format(product=device['name'], vid=device['vid'],
+                                     pid=device['pid'])
     _rules = ""
-    with open(RULES_FILE) as filo:
-        _rules = filo.read().rstrip() #
-
+    with open(UDEV_RULE_FILE) as filo:
+        _rules = filo.read().rstrip()
     rules = _rules.split("\n")
     rules.insert(-1, new_rule)
-    with open(RULES_FILE, "w") as filo:
+    with open(UDEV_RULE_FILE, "w") as filo:
         for line in rules:
             filo.write(line)
             filo.write("\n")
+    refresh_rules()
 
 
-def main():
+def main(args_schema):
     """Run the whole thing."""
-
-    # - Process arguments.
-    options = {
-        '--edit-rules': {
-            'action': _set_edit_rules,
-            'exit': False
-        },
-
-        '--help': {
-            'action': print_help,
-            'exit': True
-        }
-    }
-    _process_args(options, sys.argv[1:])
+    # - Check given command-line arguments.
+    _process_args(args_schema, sys.argv[1:])
 
     # - Check if modem is already detected.
     if is_detected():
@@ -219,47 +266,31 @@ def main():
         "usb_modeswitch",
         "udevadm"
     ]
-    for t in tools:
-        if not _check_tool(t):
-            _error_exit("`{}` isn't available on your system. please"
-                " install it first.".format(t))
+    for tool in tools:
+        if not _check_tool(tool):
+            _error_exit(f"`{tool}` is not available on your system. "
+                        "please install it first.")
 
     # - Check if we're root.
     if os.geteuid() != 0:
         _error_exit("please run this program as root")
-
 
     # - Get to work.
     device = choose_device()
     print()
     print("getting to work")
     commands = get_commands(device)
-    _cmd = apply_commands(commands, device['vid'], device['pid'])
-    if _cmd:
-        cmd = RULE.format(
-                product=device['name'],
-                vid=device['vid'],
-                pid=device['pid'],
-                usb_modeswitch=shutil.which('usb_modeswitch'),
-                cmd=_cmd
-            )
-
+    params = apply_commands(commands, device['vid'], device['pid'])
+    if params:
         print()
         print("good news! modem state switched")
-        if should_edit_rules:  # Edit the rules and return.  Don't print
-                               # the command.
+        if should_edit_rules:
             try:
-                edit_rules(cmd)
+                edit_rules(device, params)
             except FileNotFoundError:
-                print("(but didn't find the rules file)",file=sys.stderr)
+                print("(but ops! failed to edit rules)")
             else:
                 print("(and rules successfully edited)")
-                subprocess.call(["udevadm", "control", "--reload-rules"])
-            return
-        print()
-        print("mode-switch command")
-        print("-------------------")
-        print(cmd, end="")
     else:
         print()
         print()
@@ -267,7 +298,20 @@ def main():
 
 
 if __name__ == "__main__":
+    # - Configuration of supported arguments.
+    args_schema = {
+        '--edit-rules': {
+            'action': _set_edit_rules,
+            'exit': False
+        },
+
+        '--help': {
+            'action': print_help,
+            'exit': True
+        }
+    }
+
     try:
-        main()
+        main(args_schema)
     except KeyboardInterrupt:
         print()
