@@ -32,6 +32,3 @@ The repo contains a short video that shows `dymodes` switch a Huawei modem from 
 ## removing dymodes rules
 The probability of one wanting to remove rules and configs created by `dymodes` is very low. That's why there is no official way of removing them.
 -->
-
----
-_If you like the software, consider giving the repo a star!_
