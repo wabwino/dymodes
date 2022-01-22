@@ -26,6 +26,28 @@ ATTR{{idVendor}}=="{vid}", ATTR{{idProduct}}=="{pid}", RUN+="usb_modeswitch '/%k
 """
 CUSTOM_CONFIG_DIR = "/etc/usb_modeswitch.d/"
 
+# A map of popular modem manufacturers' VID to their names.
+# NOTE: Names of devices we don't have a direct known command for are also
+# included, just for easy identification to the user on nameless `lsusb`s.
+device_map = {
+    '12d1': "huawei",
+    '19d2': "zte",
+    '0421': "nokia",
+    '0408': "quanta",
+    '0af0': "option",
+    '0d46': "kobil",
+    '0df7': "mobileaction",
+    '0fca': "blackberry",
+    '0fce': "sony",
+    '106c': "pantech",
+    '10a9': "pantech",
+    '1199': "sierra",
+    '1307': "cisco",
+    '148e': "sequans",
+    '1da5': "qisda",
+    '1076': "gct",
+}
+
 should_edit_rules = False
 
 
@@ -101,28 +123,50 @@ def choose_device():
 
     # - Get list of plugged-in USB devices using `lsusb`.
     output = subprocess.check_output('lsusb').decode('utf-8')
-    regexp = r'^(?:[^\s]+\s){5}([0-9a-f]+):([0-9a-f]+)\s(.+)'
-    devices = []
+    regexp = r'^(?:[^\s]+\s){5}([0-9a-f]+):([0-9a-f]+)(?:\s(.+))?'
+    listing = []
     for line in output.strip().split('\n'):
         sre = re.match(regexp, line, re.I)
         if not sre:
             _error_exit("sorry, your system's `lsusb` is producing a strange "
                         "output")
-        if not sre.group(3).strip():  # If a device has no name, skip it.
-            continue
-        devices.append({
-            'vid': sre.group(1),
-            'pid': sre.group(2),
-            'name': sre.group(3)
-        })
+        listing.append(sre)
+
+    # NOTE: For systems using BusyBox's `lsusb` (which does not print
+    # device name), we'll use VID:PID as name of device, and we won't
+    # skip a device that has no name.
+    # If we know VID of the device, we append its manufacturer to its
+    # name (VID:PID) so that a user can easily identify it, but also
+    # that `get_commands` should only scan by name (makes things easy).
+    busybox = all([i.group(3) is None for i in listing])
+    devices = []
+    if busybox:
+        for line in listing:
+            vid, pid = line.group(1), line.group(2)
+            devices.append({
+                'vid': vid,
+                'pid': pid,
+                'name': f"{vid}:{pid}" + (f" ({device_map[vid]} device)"
+                                          if vid in device_map
+                                          else "")
+            })
+    else:
+        for line in listing:
+            if not line.group(3).strip():
+                continue
+            devices.append({
+                'vid': line.group(1),
+                'pid': line.group(2),
+                'name': line.group(3)
+            })
 
     return _get_input(devices)
 
 
 def get_commands(device):
-    """Return a list usb_modeswitch's commands that can work the given
-    device.  Each command is a dictionary of a command-line argument
-    ('cmd') and a raw configuration parameter ('param').
+    """Return a list usb_modeswitch's commands that can work on a
+    given device.  Each command is a dictionary of a command-line
+    argument ('cmd'), and a raw configuration parameter ('param').
 
     It puts specific commands for the given device at the beginning
     (that is if we know the device).
@@ -292,7 +336,6 @@ def main(args_schema):
             else:
                 print("(and rules successfully edited)")
     else:
-        print()
         print()
         _error_exit("sorry pal, it didn't work")
 
