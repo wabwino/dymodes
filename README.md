@@ -19,11 +19,6 @@ When `--edit-rules` is given, `dymodes` backs up the original rules file in '~/.
 
 **NOTE**: Plug in only one modem when running `dymodes`.
 
-<!--
-## demo
-The repo contains a short video that shows `dymodes` switch a Huawei modem from an "unrecognized" (storage) mode into a recognized modem state.
--->
-
 ## requirements
  - Python >= 3.6
  - USB_ModeSwitch
