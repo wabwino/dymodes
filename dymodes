@@ -8,7 +8,7 @@ automatic
 """
 
 __app__ = "dymodes"
-__version__ = "25-jan-2021"
+__version__ = "25-jan-2022"
 __author__ = "wabwino maliwa"
 
 import glob
